@@ -1,0 +1,405 @@
+
+/*********************************************************************************************
+
+    This is public domain software that was developed by or for the U.S. Naval Oceanographic
+    Office and/or the U.S. Army Corps of Engineers.
+
+    This is a work of the U.S. Government. In accordance with 17 USC 105, copyright protection
+    is not available for any work of the U.S. Government.
+
+    Neither the United States Government, nor any employees of the United States Government,
+    nor the author, makes any warranty, express or implied, without even the implied warranty
+    of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE, or assumes any liability or
+    responsibility for the accuracy, completeness, or usefulness of any information,
+    apparatus, product, or process disclosed, or represents that its use would not infringe
+    privately-owned rights. Reference herein to any specific commercial products, process,
+    or service by trade name, trademark, manufacturer, or otherwise, does not necessarily
+    constitute or imply its endorsement, recommendation, or favoring by the United States
+    Government. The views and opinions of authors expressed herein do not necessarily state
+    or reflect those of the United States Government, and shall not be used for advertising
+    or product endorsement purposes.
+
+*********************************************************************************************/
+
+/* tquantile.c
+	purpose:  compute t-quantiles (critical values of t)
+		according to william t. shaw's method in
+		"new methods for simulating the student t-distribution -
+		direct use of the inverse cumulative distribution."
+	date:  aug 2009
+	implementation:  david h fabre of navo converted from f95 version off internet 
+	notes:  may not need 128bit long double answer quality. changed to doubles instead.
+		didn't need huge precsion (from EPS).
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include "tquantile.h" /* get struct, protos, and constants */
+
+/******************************************************************************/
+/* integer t-scale */
+static double itscale(int n)
+{
+	int i;
+	double mypi=3.141592653589793238462643383279503;
+	double id, scale;
+
+	switch (n)
+	{
+		case 1: scale = mypi/2.0; break;
+		case 2: scale = sqrt(2.0); break;
+		case 3: scale = mypi*sqrt(3.0)/4.0; break;
+		case 4: scale = 4.0/3.0; break;
+		case 5: scale = 3.0*sqrt(5.0)*mypi/16.0; break;
+		case 6: scale = 8.0*sqrt(2.0/3.0)/5.0; break;
+		case 7: scale = 5.0*sqrt(7.0)*mypi/32.0; break;
+		case 8: scale = 32.0*sqrt(2.0)/35.0; break;
+		case 9: scale = 105.0*mypi/256.0; break;
+		case 10: scale = 128.0*sqrt(2.0/5.0)/63.0; break;
+		default:
+		if ( !(n%2) ) /* even */
+		{
+			scale = 128.0*sqrt(2.0/5.0)/63.0;
+			for(i = 12; i <= n; i += 2)
+			{
+				id = (double)i;
+				scale *= sqrt(id*(id-2.0))/(id-1.0);
+			}
+		}
+		else /* odd */
+		{
+			scale = 105.0*mypi/256.0;
+			for(i = 11; i <= n; i += 2)
+			{
+				id = (double)i;
+				scale *= sqrt(id*(id-2.0))/(id-1.0);
+			}
+		}
+		break;
+	}
+	return scale;
+} /* itscale */
+
+/******************************************************************************/
+/* real valued t-scale */
+static double rtscale(double dof)
+{
+	int i;
+	double asymptote, invdof, cupower;
+	double aarr[10];
+	double scale=1.2533141373155002512078826424055; /* sqrt(pi/2) */
+
+	aarr[0]=1.0/4.0;
+	aarr[1]=1.0/3.2;
+	aarr[2]=-5.0/1.28 ;
+	aarr[3]=-2.1/2.048 ;
+	aarr[4]=3.99/8.192;
+	aarr[5]=8.69/6.5536;
+	aarr[6]=-3.9325/2.62144;
+	aarr[7]=-3.34477/8.388608;
+	aarr[8]=2.8717403/3.3554432;
+	aarr[9]=5.9697183/2.68435456;
+	while (dof < 1000.0)
+	{
+		scale *= (dof+1.0)/sqrt(dof*(dof+2.0));
+		dof += 2.0;
+	}
+	cupower = invdof = 1.0/dof;
+	asymptote = 1.0;
+	for(i = 0; i < 10; i++) 
+	{
+		asymptote += cupower*aarr[i];
+		cupower *= invdof;
+	}
+	scale *= asymptote;
+
+	return scale;
+
+} /* rtscale */
+
+/******************************************************************************/
+/* central recursive quantile */
+static double centralrq(double u, double *rat, double scale)
+{
+	int i;
+	double b,s,t,q;
+
+	b = scale*(2.0*u - 1.0);
+	i = -1;
+	s = b;
+	q = b*b;
+	while ( (fabs(b) > EPS && i <= ARRSIZE-3) || i < 10 )
+	{
+		t = s;
+		i++;
+		b *= q*rat[i+1];
+		s = t + b;
+	}
+	if ( TQUANT_DEBUG && i == ARRSIZE-2 )
+	{
+		printf("end of series reached in central model - switch to tail model\n");
+	}
+
+	return s;
+
+} /* centralrq */
+	
+/******************************************************************************/
+/* tail recursive quantile */
+static double tailrq(double x, double *rat)
+{
+	int i;
+	double b,s,t;
+
+	b = x;
+	i = -1;
+	s = b;
+
+	while ( (fabs(b) > EPS && i <= TARRSIZE-3) || i < 10 )
+	{
+		t = s;
+		i++;
+		b *= x*rat[i+1];
+		s = t + b;
+	}
+	if ( TQUANT_DEBUG && i == TARRSIZE-2 )
+	{
+		printf("end of series reached in tail model\n");
+	}
+
+	return s;
+
+} /* tailrq */
+
+/******************************************************************************/
+int tinit( TQ *tq, double dof )
+{
+	int i, k, l, n, p;
+	double tempa, tempb;
+	double qarr[ARRSIZE];
+	double tqarr[TARRSIZE];
+
+	if (TQUANT_DEBUG) printf("dof in tinit = %f\n", dof);
+
+	tq->dof = dof;
+	if ( tq->dof < 1 )
+	{
+		return 0;
+	}
+
+	n = (int) tq->dof;
+
+	if ( fabs((double)n - tq->dof) < EPSI)
+		tq->scale = itscale(n);	/* integer */
+	else
+		tq->scale = rtscale(tq->dof); /* real */
+
+	/* make sure things are zero'd out */
+	for(i = 0; i < ARRSIZE; i++) qarr[i] = tq->ratios[i] = 0; 
+	for(i = 0; i < TARRSIZE; i++) tqarr[i] = tq->tratios[i] = 0; 
+
+	qarr[1] = 1.0;
+	for(p = 1; p <= ARRSIZE-1; p++)
+	{
+#warning The following line accesses the qarr array out of bounds!!!  Somebody get Dave Fabre to fix this!
+		qarr[p+1] = 0.0;
+		for(k = 0; k <= p-1; k++)
+		{
+		   for(l = 0; l <= p-k-1; l++)
+		   {
+			tempa = qarr[k+1]*qarr[l+1]*qarr[p-k-l];
+			tempb = (2.0*l+1.0)*(2.0*(p-k-l)-1.0)*(1.0 + 1.0/tq->dof);
+			tempb -= 2.0*k*(2.0*k+1)/tq->dof;
+			qarr[p+1] += tempa*tempb;
+		   }
+		}
+#warning The following line accesses the qarr array out of bounds!!!  Somebody get Dave Fabre to fix this!
+		qarr[p+1] = 0.5*qarr[p+1]/p/(2.0*p+1.0);
+	}
+
+#warning The following line accesses the qarr array out of bounds!!!  Somebody get Dave Fabre to fix this!
+	for(p = 1; p <= ARRSIZE-1; p++)	
+		tq->ratios[p] = qarr[p+1]/qarr[p];
+	
+	tqarr[1] = 1.0;
+	for(p = 2; p <= TARRSIZE; p++)
+	{
+#warning The following line accesses the tqarr array out of bounds!!!  Somebody get Dave Fabre to fix this!
+		tqarr[p] = 0.0;
+		for(k = 1; k <= p-1; k++)
+		{
+			for(l = 1; l <= p-k; l++)
+			{ 
+				tempa = tqarr[k]*tqarr[l]*tqarr[p+1-k-l];
+				tempb = k*(k-tq->dof/2.0)+(tq->dof/2.0-1.5)*l*(p+1.0-k-l);
+				tqarr[p] += tempa*tempb;
+			}
+		}
+		if ( p > 2 )
+		{
+			for(k = 2; k <= p-1; k++)
+			{
+				tempa = tqarr[k]*tqarr[p+1-k];
+				tempb = (1.0-tq->dof/2.0)*k*(p-k)-k*(k-1.0);
+				tqarr[p] += tempa*tempb;
+			}
+		}
+		tqarr[p] /= (p*p+p*(tq->dof/2.0-2.0)+1.0-tq->dof/2.0);
+	} /* for p */
+	
+	for(p = 1; p <= TARRSIZE-1; p++)
+	{
+		if ( fabs(tqarr[p]) > 0.0 )
+			tq->tratios[p] = tqarr[p+1]/tqarr[p];
+		else
+			tq->tratios[p] = 0.0;
+	}
+
+	return n; /* number of degrees of freedom >= 1 */
+
+} /* tinit */
+
+/******************************************************************************/
+/* tq has the dof, scale, and ratios and u is the 1-alpha/2 
+	percentile of interest (0.975 perhaps for two-tailed 95% CL)
+*/
+double tquantile( TQ *tq, double u ) 
+{
+	double x;
+	double quantile=0.0;
+	
+	if ( u > TAIL && u < (1-TAIL) ) /* center quantiles */
+	{
+		quantile = centralrq(u, tq->ratios, tq->scale);
+	}
+	else if ( u >= (1-TAIL) ) /* upper tail */
+	{
+		x = (1.0 - u)*tq->scale*2.0*sqrt(tq->dof);
+		x = pow(x, 2.0/tq->dof);
+		quantile = tailrq(x, tq->tratios);
+		quantile = sqrt( tq->dof*(1.0/quantile-1.0) );
+	}
+	else if ( u <= TAIL ) /* lower tail */
+	{
+		x = u*tq->scale*2.0*sqrt(tq->dof);
+		x = pow(x, 2.0/tq->dof);
+		quantile = tailrq(x, tq->tratios);
+		quantile = -sqrt( tq->dof*(1.0/quantile-1.0) );
+	}
+
+
+	/*quantile = rint(quantile*1.0e5)/1.0e5;*/ /* got about 4 sigfigs */
+
+	return (quantile);
+
+} /* tquantile */
+
+/* 
+cc -o tquantile tquantile.c -lm  -D_TEST_TQUANTILE
+*/
+#if defined( _TEST_TQUANTILE )
+/******************************************************************************/
+int main( int argc, char **argv )
+{
+	TQ tq;
+	double dof;
+	double u;
+	int k;
+
+	if ( argc != 2 )
+	{
+		printf("usage:  %s <dof>\n", argv[0]);
+		printf("\tstudent quantile function\n");
+		printf("\tenter degrees of freedom as a.b, where a>=1 and b may be empty\n");
+		printf("\te.g. 3., 4.1, 20.0\n");
+		printf("\tprogram accepts real degrees of freedom >= 1.0\n");
+		exit(-1);
+	}
+
+	sscanf(argv[1], "%lf", &dof);
+	printf("dof = %f\n", dof);
+
+	if ( !tinit( &tq, dof ) )
+	{
+		printf("couldn't initialize t-quantile struct\n");
+		exit(-1);
+	}
+
+	u = 0.975;
+	printf("tquantile(%f, %f) = %f\n", tq.dof, u, tquantile(&tq, u));
+
+	while (1)
+	{
+		printf("enter 1-alpha/2 value to interegate (0.975 for 2-tailed 95%%CL):  ");
+		scanf("%lf", &u);
+		printf("tquantile(%f, %f) = %f\n", tq.dof, u, tquantile(&tq, u));
+	}
+
+} /* main */
+#endif
+
+/*
+cc -o tquantile2 tquantile.c -lm  -D_TEST_TQUANTILE2
+*/
+#if defined( _TEST_TQUANTILE2 )
+/******************************************************************************/
+int main( int argc, char **argv )
+{
+        TQ tq;
+        double dof=1, n;
+        double u=0.975;
+
+        if ( argc == 1 )
+        {
+                printf("usage:  %s <maxdof> <u=1-alpha/2 (def=%f for two-tailed 95%%CL)>\n", argv[0], u);
+                exit(-1);
+        }
+
+	sscanf(argv[1], "%lf", &n);
+
+	if ( argc == 3 )
+		sscanf(argv[2], "%lf", &u);
+
+        while ( dof <= n )
+        {
+                if ( tinit( &tq, dof ) )
+                {
+                        printf("%f %f %.16f\n", tq.dof, u, tquantile(&tq, u));
+                }
+                dof++;
+        }
+} /* main */
+#endif
+
+/*
+cc -o tquantile3 tquantile.c -lm  -D_TEST_TQUANTILE3
+*/
+#if defined( _TEST_TQUANTILE3 )
+#define MAXDOF 50
+/******************************************************************************/
+int main( int argc, char **argv )
+{
+        TQ tq[MAXDOF]; /* do first 50 dofs */
+        double dof=1, n;
+        double u=0.975;
+	int i, ans=1;
+
+        if ( argc != 2 )
+        {
+                printf("usage:  %s <1-alpha/2>\n", argv[0]);
+                exit(-1);
+        }
+
+	sscanf(argv[1], "%lf", &u);
+	for(i = 0; ans && i < MAXDOF; i++)
+	{
+		dof = (double)(i+1);
+		ans = tinit(&tq[i], dof);
+	}
+
+	for(i = 0; i < MAXDOF; i++)
+                printf("%f %f %.16f\n", tq[i].dof, u, tquantile(&tq[i], u));
+
+} /* main */
+#endif

@@ -1,0 +1,67 @@
+
+/*********************************************************************************************
+
+    This is public domain software that was developed by or for the U.S. Naval Oceanographic
+    Office and/or the U.S. Army Corps of Engineers.
+
+    This is a work of the U.S. Government. In accordance with 17 USC 105, copyright protection
+    is not available for any work of the U.S. Government.
+
+    Neither the United States Government, nor any employees of the United States Government,
+    nor the author, makes any warranty, express or implied, without even the implied warranty
+    of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE, or assumes any liability or
+    responsibility for the accuracy, completeness, or usefulness of any information,
+    apparatus, product, or process disclosed, or represents that its use would not infringe
+    privately-owned rights. Reference herein to any specific commercial products, process,
+    or service by trade name, trademark, manufacturer, or otherwise, does not necessarily
+    constitute or imply its endorsement, recommendation, or favoring by the United States
+    Government. The views and opinions of authors expressed herein do not necessarily state
+    or reflect those of the United States Government, and shall not be used for advertising
+    or product endorsement purposes.
+
+*********************************************************************************************/
+
+/* tquantile.h
+	purpose:  header and structures for functions to  
+		compute t-quantiles (critical values of t)
+		according to william t. shaw's method in
+		"new methods for simulating the student t-distribution -
+		direct use of the inverse cumulative distribution."
+	date:  aug 2009
+	implementation:  david h fabre of navo converted from f95 version off internet 
+	notes:  may not need 128bit long double answer quality. changed to doubles instead.
+		didn't need gargantuant precsion (from EPS).
+*/
+
+#define TQUANT_DEBUG 0
+
+#define EPSI 1e-6 /* for checking dof is an integer */
+
+/* - below values were used for "long double" version
+	and produce answers that are more correct */
+/* added +1 to account for fortran indexing from 1 */
+/* #define ARRSIZE (200+1)
+#define TARRSIZE (400+1)
+#define TAIL 0.1
+#define EPS 1e-36 */
+
+/* to reduce calculations a bit - good to ~4 sigfigs */
+#define ARRSIZE (50+1)
+#define TARRSIZE (100+1)
+#define TAIL 0.1
+#define EPS 1e-8
+
+typedef struct
+{
+	double dof;
+	double scale;
+	double ratios[ARRSIZE];
+	double tratios[TARRSIZE];
+} TQ;
+
+int tinit( TQ *tq, double dof );
+/* initialization function - sets up scale and ratios */
+
+double tquantile( TQ *tq, double u );
+/* u is the 1-alpha/2 percentile of interest (0.975 for two-tailed 95%CL) */
+

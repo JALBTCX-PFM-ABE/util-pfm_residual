@@ -1,0 +1,148 @@
+
+/*********************************************************************************************
+
+    This is public domain software that was developed by or for the U.S. Naval Oceanographic
+    Office and/or the U.S. Army Corps of Engineers.
+
+    This is a work of the U.S. Government. In accordance with 17 USC 105, copyright protection
+    is not available for any work of the U.S. Government.
+
+    Neither the United States Government, nor any employees of the United States Government,
+    nor the author, makes any warranty, express or implied, without even the implied warranty
+    of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE, or assumes any liability or
+    responsibility for the accuracy, completeness, or usefulness of any information,
+    apparatus, product, or process disclosed, or represents that its use would not infringe
+    privately-owned rights. Reference herein to any specific commercial products, process,
+    or service by trade name, trademark, manufacturer, or otherwise, does not necessarily
+    constitute or imply its endorsement, recommendation, or favoring by the United States
+    Government. The views and opinions of authors expressed herein do not necessarily state
+    or reflect those of the United States Government, and shall not be used for advertising
+    or product endorsement purposes.
+
+*********************************************************************************************/
+
+/* sortindx.c
+	purpose:  use numerical recipes indexx (heapsort, indirect indexed)
+		to sort things.
+	author:  dave fabre, navo
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+#include "sortindx.h"
+
+/******************************************************************************/
+static int indexx(int n, double *arrin1, int *indx1)
+{
+	int l,j,ir,indxt,i, *indx;
+	double q, *arrin;
+
+	if ( n <= 0 || arrin1 == NULL || indx1 == NULL ) return 0;
+
+/* part of getting around the 1 offset */
+indx = --indx1;
+arrin = --arrin1;
+
+	for (j=1;j<=n;j++) indx[j]=j;
+	l=(n >> 1) + 1;
+	ir=n;
+	for (;;) {
+		if (l > 1)
+			q=arrin[(indxt=indx[--l])];
+		else {
+			q=arrin[(indxt=indx[ir])];
+			indx[ir]=indx[1];
+			if (--ir == 1) {
+				indx[1]=indxt;
+				return n;
+			}
+		}
+		i=l;
+		j=l << 1;
+		while (j <= ir) {
+			if (j < ir && arrin[indx[j]] < arrin[indx[j+1]]) j++;
+			if (q < arrin[indx[j]]) {
+				indx[i]=indx[j];
+				j += (i=j);
+			}
+			else j=ir+1;
+		}
+		indx[i]=indxt;
+	}
+
+	return n;
+} /* indexx */
+
+/******************************************************************************/
+int sortindx(int n, double *arr, int *indx)
+/* part of getting around the 1 offset */
+{
+	int i;
+
+	indexx(n, arr, indx);
+	for(i = 0; i < n; i++)
+		indx[i] = indx[i] - 1;
+
+	return i;
+} /* sortindx */
+
+#ifdef _SORT_MAIN
+/*
+cc -o sortindx sortindx.c -D_SORT_MAIN
+*/
+
+/******************************************************************************/
+int show_arr(int n, double *arr, int *indx)
+{
+        int i;
+
+        for(i = 0; i < n; i++)
+                printf("%d %d %f\n", i, indx[i], arr[indx[i]]);
+
+        return i;
+
+} /* show_arr */
+
+#define MAX_ARR 256
+/******************************************************************************/
+int main(int argc, char **argv)
+{
+        FILE *infile;
+        double num, arr[MAX_ARR];
+        int i, n=0, indx[MAX_ARR];
+
+        if (argc != 2)
+        {
+                printf("usage:  %s <filename>\n", argv[0]);
+                exit(-1);
+        }
+        else
+        {
+                if ( (infile = fopen(argv[1], "r")) != NULL )
+                {
+                        while ( fscanf(infile, "%lf ", &num) == 1 )
+                        {
+                                indx[n] = n;
+                                arr[n++] = num;
+                        }
+                        fclose(infile);
+
+                        printf("read %d numbers\n", n);
+                        show_arr(n, arr, indx);
+
+                        sortindx(n, arr, indx);
+                        printf("sorted array\n");
+                        show_arr(n, arr, indx);
+                }
+                else
+                {
+                        printf("trouble opening <%s>\n", argv[1]);
+                        exit(-2);
+                }
+        }
+
+        return 1;
+} /* main */
+#endif

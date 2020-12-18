@@ -1,0 +1,156 @@
+
+/*********************************************************************************************
+
+    This is public domain software that was developed by or for the U.S. Naval Oceanographic
+    Office and/or the U.S. Army Corps of Engineers.
+
+    This is a work of the U.S. Government. In accordance with 17 USC 105, copyright protection
+    is not available for any work of the U.S. Government.
+
+    Neither the United States Government, nor any employees of the United States Government,
+    nor the author, makes any warranty, express or implied, without even the implied warranty
+    of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE, or assumes any liability or
+    responsibility for the accuracy, completeness, or usefulness of any information,
+    apparatus, product, or process disclosed, or represents that its use would not infringe
+    privately-owned rights. Reference herein to any specific commercial products, process,
+    or service by trade name, trademark, manufacturer, or otherwise, does not necessarily
+    constitute or imply its endorsement, recommendation, or favoring by the United States
+    Government. The views and opinions of authors expressed herein do not necessarily state
+    or reflect those of the United States Government, and shall not be used for advertising
+    or product endorsement purposes.
+
+*********************************************************************************************/
+
+/* janapply.c
+	purpose:  function for jan to apply median and tquantile scaling to 
+		pfm node data.
+	author:  dave fabre, navo, aug 2010
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+#include "median.h" 
+#include "normdev.h" 
+#include "tquantile.h"
+
+/******************************************************************************/
+static double stdev( int n, double *x )
+{
+	int i;
+	double sumx = 0.0, sumxx = 0.0, xbar;
+
+	if ( n < 2 ) return -9999;
+
+	for(i = 0; i < n; i++)
+	{
+		sumx += x[i]; 
+		sumxx += x[i]*x[i]; 
+	}
+	xbar = sumx/n;
+
+	return sqrt( (sumxx - n*xbar*xbar)/(n - 1) );
+
+} /* stdev */
+
+
+/******************************************************************************/
+int janapply( int maxdof, TQ *tq, int n, double *z, double p,
+		double *m, double *u )
+
+/* n is the number of values in the array of depths z
+	p is the area under the pdf less both tails (for 2-tailed) appropriate 
+	for the confidence of interest.	 e.g. for 95%CL ,
+		p = 0.975 = 1 - alpha/2 = 1 - .05/2 
+	the median will be returned in m
+	the uncertainty (s*k, s=stdev of z, k=coverage
+		where k is normal beyond maxdof=30 and from student-t otherwise
+*/
+{
+	double s;
+
+	if ( n < 2 )
+	{
+		printf("too few samples in function janapply\n");
+		return -9999;
+	}
+
+	*m = median( n, z );
+	s = stdev(n, z);
+
+	if ( n < maxdof ) /* small number of samples - 30 for now */ 
+	{
+#if defined( _TEST_JANAPPLY )
+fprintf(stderr, "s = %f, tquantile( %d, %f ) =  %f\n", s, n-1, p, tquantile( &tq[n-1], p ));
+#endif
+		*u = s*tquantile( &tq[n-1], p ); /* apply tq(n-1, 1-alpha/2) */
+	}
+	else /* large sample size */ 
+	{
+#if defined( _TEST_JANAPPLY )
+fprintf(stderr, "s = %f, normdev( %f ) =  %f\n", s, p, normdev( p ));
+#endif
+		*u = s*normdev( p );
+	}
+	
+	return n;
+
+} /* janapply */
+
+/******************************************************************************/
+int janinit( TQ *tq, int maxdof )
+{
+	int i, ans=1;
+
+	for(i = 0; ans && i < maxdof; i++)
+          {
+		ans = tinit( &tq[i], i+1 );
+          }
+
+
+	return i;
+} /* janinit */
+
+#if defined( _TEST_JANAPPLY )
+/*
+cc -o janapply janapply.c median.c sortindx.c normdev.c tquantile.c -D_TEST_JANAPPLY -lm
+*/
+#define MAXDOF 30
+/******************************************************************************/
+int main( int argc, char **argv )
+{
+	FILE *infile;
+	TQ tq[MAXDOF];
+	double arr[1024], num, m, u;
+	int maxdof=MAXDOF, n=0, i;
+	double p=0.975; /* 2-tailed 95%cl, 1 -.05/2 = 1 - .025 = 0.975 */
+			/* p is the area under the distribution curve */ 
+
+	if ( argc != 2 )
+	{
+		printf("usage:  %s <filename>\n", argv[0]);
+		printf("\twhere filename contains a seq of pts\n");
+		exit(-1);
+	}
+
+	if ( (infile = fopen(argv[1], "r")) != NULL )
+	{
+		while ( fscanf(infile, "%lf ", &num) == 1 )
+		{
+			arr[n++] = num;
+		}
+		fclose(infile);
+	}
+
+	if ( janinit( tq, maxdof ) )
+	{
+		janapply( maxdof, tq, n, arr, p, &m, &u );
+		fprintf(stderr, "n = %d\n", n);
+		for(i = 0; i < n; i++) printf("%d %f\n", i, arr[i]);
+		fprintf(stderr, "\nmedian = %f, uncert = %f, [%f, %f]\n",
+			m, u, m-u, m+u);
+	}
+	
+} /* main */
+#endif
